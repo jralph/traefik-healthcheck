@@ -119,7 +119,6 @@ func traefikIsHealthy(traefikAddresses []string) bool {
 
 		if err != nil {
 			log.Print("Error contacting traefik providers endpoint.", err)
-			response.Body.Close()
 			return false
 		}
 
