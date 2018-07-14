@@ -16,6 +16,7 @@ type Configuration struct {
 	PollInterval int
 	TraefikHosts []string
 	ConsulHost   string
+	TraefikEntrypoints []string
 }
 
 // Traefik providers endpoint struct for json response.
@@ -109,7 +110,7 @@ func consulIsHealthy(consulAddress string) bool {
 }
 
 // Check traefik is healthy.
-func traefikIsHealthy(traefikAddresses []string) bool {
+func traefikIsHealthy(traefikAddresses []string, traefikEntrypoints []string) bool {
 	var traefikClient = &http.Client{
 		Timeout: time.Second * 10,
 	}
@@ -153,12 +154,29 @@ func traefikIsHealthy(traefikAddresses []string) bool {
 		response.Body.Close()
 	}
 
+	for _, host := range traefikEntrypoints {
+		response, err := traefikClient.Get("http://" + host + "/api/providers")
+
+		if err != nil {
+			log.Print("Error contacting traefik entrypoint.", err)
+			return false
+		}
+
+		if response.StatusCode >= 500 {
+			log.Printf("Error checking entrypoint response. Got status code %d", response.StatusCode)
+			response.Body.Close()
+			return false
+		}
+
+		response.Body.Close()
+	}
+
 	return true
 }
 
 // Check the overall load balancer is healthy.
 func isLBHealthy(config Configuration) bool {
-	return consulIsHealthy(config.ConsulHost) && traefikIsHealthy(config.TraefikHosts)
+	return consulIsHealthy(config.ConsulHost) && traefikIsHealthy(config.TraefikHosts, config.TraefikEntrypoints)
 }
 
 // Poll for health changes and save to the global healthy variable.
