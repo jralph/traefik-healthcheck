@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"time"
+	"crypto/tls"
 )
 
 // Configuration settings.
@@ -111,8 +112,12 @@ func consulIsHealthy(consulAddress string) bool {
 
 // Check traefik is healthy.
 func traefikIsHealthy(traefikAddresses []string, traefikEntrypoints []string) bool {
+	transport := &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	}
 	var traefikClient = &http.Client{
 		Timeout: time.Second * 10,
+		Transport: transport,
 	}
 
 	for _, host := range traefikAddresses {
@@ -155,7 +160,7 @@ func traefikIsHealthy(traefikAddresses []string, traefikEntrypoints []string) bo
 	}
 
 	for _, host := range traefikEntrypoints {
-		response, err := traefikClient.Get("http://" + host + "/api/providers")
+		response, err := traefikClient.Get(host + "/api/providers")
 
 		if err != nil {
 			log.Print("Error contacting traefik entrypoint.", err)
