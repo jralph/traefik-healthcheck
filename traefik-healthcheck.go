@@ -12,11 +12,16 @@ import (
 )
 
 // Configuration settings.
+type TraefikHost struct {
+	Host        string
+	MinServices int
+}
+
 type Configuration struct {
-	ListenAddr   string
-	PollInterval int
-	TraefikHosts []string
-	ConsulHost   string
+	ListenAddr         string
+	PollInterval       int
+	TraefikHosts       []TraefikHost
+	ConsulHost         string
 	TraefikEntrypoints []string
 }
 
@@ -60,11 +65,16 @@ func main() {
 
 // Create a new configuration setup.
 func newConfig(path string) Configuration {
+	defaultHosts := []TraefikHost{{
+		Host:        "127.0.0.1:8080",
+		MinServices: 0,
+	}}
+
 	config := Configuration{
 		ListenAddr:   "0.0.0.0:10700",
 		PollInterval: 10,
-		TraefikHosts: []string{"localhost:8080"},
-		ConsulHost:   "localhost:8500",
+		TraefikHosts: defaultHosts,
+		ConsulHost:   "127.0.0.1:8500",
 	}
 
 	if _, err := os.Stat(path); err == nil {
@@ -111,7 +121,7 @@ func consulIsHealthy(consulAddress string) bool {
 }
 
 // Check traefik is healthy.
-func traefikIsHealthy(traefikAddresses []string, traefikEntrypoints []string) bool {
+func traefikIsHealthy(traefikHosts []TraefikHost, traefikEntrypoints []string) bool {
 	transport := &http.Transport{
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 	}
@@ -120,8 +130,8 @@ func traefikIsHealthy(traefikAddresses []string, traefikEntrypoints []string) bo
 		Transport: transport,
 	}
 
-	for _, host := range traefikAddresses {
-		response, err := traefikClient.Get("http://" + host + "/api/providers")
+	for _, host := range traefikHosts {
+		response, err := traefikClient.Get("http://" + host.Host + "/api/providers")
 
 		if err != nil {
 			log.Print("Error contacting traefik providers endpoint.", err)
@@ -144,13 +154,13 @@ func traefikIsHealthy(traefikAddresses []string, traefikEntrypoints []string) bo
 			return false
 		}
 
-		if len(providers.ConsulCatalog.Backends) == 0 {
+		if len(providers.ConsulCatalog.Backends) < host.MinServices {
 			log.Print("No backends found in Traefik.")
 			response.Body.Close()
 			return false
 		}
 
-		if len(providers.ConsulCatalog.Frontends) == 0 {
+		if len(providers.ConsulCatalog.Frontends) < host.MinServices {
 			log.Print("No frontends found in Traefik.")
 			response.Body.Close()
 			return false
@@ -160,7 +170,7 @@ func traefikIsHealthy(traefikAddresses []string, traefikEntrypoints []string) bo
 	}
 
 	for _, host := range traefikEntrypoints {
-		response, err := traefikClient.Get(host + "/api/providers")
+		response, err := traefikClient.Get(host)
 
 		if err != nil {
 			log.Print("Error contacting traefik entrypoint.", err)
