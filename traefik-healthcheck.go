@@ -57,6 +57,8 @@ func main() {
 
 	config := newConfig(*configFile)
 
+	log.Printf("Server TTL Seconds: %d", config.HealthyTTLSec)
+
 	go pollHealth(config)
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
