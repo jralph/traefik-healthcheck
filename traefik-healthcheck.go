@@ -9,6 +9,7 @@ import (
 	"os"
 	"time"
 	"crypto/tls"
+	"math/rand"
 )
 
 // Configuration settings.
@@ -23,6 +24,8 @@ type Configuration struct {
 	TraefikHosts       []TraefikHost
 	ConsulHost         string
 	TraefikEntrypoints []string
+	HealthyTTLSec      int
+	HealthyTTLOffset   int
 }
 
 // Traefik providers endpoint struct for json response.
@@ -31,6 +34,13 @@ type TraefikProviders struct {
 		Backends  map[string]interface{} `json:"backends"`
 		Frontends map[string]interface{} `json:"frontends"`
 	} `json:"consul_catalog"`
+}
+
+// Traefik Healthcheck endpoint
+type TraefikHealth struct {
+	Uptime       string `json:"uptime"`
+	UptimeSec    float64 `json:"uptime_sec"`
+	RequestCount int `json:"total_count"`
 }
 
 // Global variable to determine if the load-balancer is healthy or not.
@@ -63,6 +73,11 @@ func main() {
 	log.Println("Fnished.")
 }
 
+func computeTtl(ttl int, offset int) int {
+	rand.Seed(time.Now().Unix())
+	return rand.Intn(offset - 0) + ttl
+}
+
 // Create a new configuration setup.
 func newConfig(path string) Configuration {
 	defaultHosts := []TraefikHost{{
@@ -71,10 +86,12 @@ func newConfig(path string) Configuration {
 	}}
 
 	config := Configuration{
-		ListenAddr:   "0.0.0.0:10700",
-		PollInterval: 10,
-		TraefikHosts: defaultHosts,
-		ConsulHost:   "127.0.0.1:8500",
+		ListenAddr:       "0.0.0.0:10700",
+		PollInterval:     10,
+		TraefikHosts:     defaultHosts,
+		ConsulHost:       "127.0.0.1:8500",
+		HealthyTTLSec:    0,
+		HealthyTTLOffset: 43200,
 	}
 
 	if _, err := os.Stat(path); err == nil {
@@ -87,6 +104,10 @@ func newConfig(path string) Configuration {
 		if err != nil {
 			log.Fatal("Unable to read config file. Check json is correct.", err)
 		}
+	}
+
+	if config.HealthyTTLSec > 0 {
+		config.HealthyTTLSec = computeTtl(config.HealthyTTLSec, config.HealthyTTLOffset)
 	}
 
 	return config
@@ -121,7 +142,7 @@ func consulIsHealthy(consulAddress string) bool {
 }
 
 // Check traefik is healthy.
-func traefikIsHealthy(traefikHosts []TraefikHost, traefikEntrypoints []string) bool {
+func traefikIsHealthy(traefikHosts []TraefikHost, traefikEntrypoints []string, ttl int) bool {
 	transport := &http.Transport{
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 	}
@@ -169,6 +190,35 @@ func traefikIsHealthy(traefikHosts []TraefikHost, traefikEntrypoints []string) b
 		response.Body.Close()
 	}
 
+	if ttl != 0 {
+		for _, host := range traefikHosts {
+			response, err := traefikClient.Get("http://" + host.Host + "/health")
+
+			if err != nil {
+				log.Print("Error contacting traefik providers endpoint.", err)
+				return false
+			}
+
+			if response.StatusCode != 200 {
+				log.Printf("Error fetching traefik providers. Got status code %d", response.StatusCode)
+				response.Body.Close()
+				return false
+			}
+
+			health := TraefikHealth{}
+			decoder := json.NewDecoder(response.Body)
+			err = decoder.Decode(&health)
+
+			if int(health.UptimeSec) > ttl {
+				log.Printf("Server %s reached max ttl of %d", host.Host, ttl)
+				response.Body.Close()
+				return false
+			}
+
+			response.Body.Close()
+		}
+	}
+
 	for _, host := range traefikEntrypoints {
 		response, err := traefikClient.Get(host)
 
@@ -191,7 +241,7 @@ func traefikIsHealthy(traefikHosts []TraefikHost, traefikEntrypoints []string) b
 
 // Check the overall load balancer is healthy.
 func isLBHealthy(config Configuration) bool {
-	return consulIsHealthy(config.ConsulHost) && traefikIsHealthy(config.TraefikHosts, config.TraefikEntrypoints)
+	return consulIsHealthy(config.ConsulHost) && traefikIsHealthy(config.TraefikHosts, config.TraefikEntrypoints, config.HealthyTTLSec)
 }
 
 // Poll for health changes and save to the global healthy variable.
